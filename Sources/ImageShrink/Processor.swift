@@ -40,7 +40,7 @@ struct ScanResult {
 
 enum Processor {
     static let logName = "ImageShrink log.txt"
-    static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic", "heif",
+    static let imageExtensions: Set<String> = ["jpg", "jpeg", "jpe", "jfif", "png", "tif", "tiff", "heic", "heif",
                                                 "bmp", "gif", "psd", "jp2", "webp"]
     static let qualities: [Int] = [92, 88, 84, 80, 76, 72, 68, 64, 60, 55, 50, 45, 40, 35, 30]
 
@@ -183,6 +183,9 @@ enum Processor {
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
             return fail("Could not be read — the file may be damaged or in an unsupported format")
         }
+        if CGImageSourceGetStatusAtIndex(source, 0) != .statusComplete || isTruncatedJPEG(src) {
+            return fail("The file is incomplete — it looks cut off or only partly downloaded")
+        }
         var w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
         var h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
         let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
@@ -243,7 +246,8 @@ enum Processor {
         guard let first = search(metadata) else { return fail("Could not be saved as JPEG") }
         var data = first.0
         var q = first.1
-        if data.count >= settings.maxBytes, metadata != nil, let second = search(nil), second.0.count < data.count {
+        // Drop metadata only if that actually brings the file under the limit
+        if data.count >= settings.maxBytes, metadata != nil, let second = search(nil), second.0.count < settings.maxBytes {
             data = second.0
             q = second.1
             notes.append("metadata dropped to save space")
@@ -269,11 +273,19 @@ enum Processor {
               jpeg.count > 4, jpeg[jpeg.startIndex] == 0xFF, jpeg[jpeg.startIndex + 1] == 0xD8 else { return jpeg }
         let bytes = [UInt8](jpeg)
         let marker = Array("ICC_PROFILE".utf8)
-        let scanEnd = min(bytes.count, 262_144)
-        if scanEnd > marker.count {
-            for i in 0..<(scanEnd - marker.count) where bytes[i] == marker[0] && Array(bytes[i..<(i + marker.count)]) == marker {
+        // Walk the header segments; only a real APP2 "ICC_PROFILE\0" segment counts
+        // (the words can also appear inside XMP/EXIF text).
+        var seg = 2
+        while seg + 4 <= bytes.count, bytes[seg] == 0xFF {
+            let type = bytes[seg + 1]
+            if type == 0xDA || type == 0xD9 { break }                  // image data starts
+            let len = Int(bytes[seg + 2]) << 8 | Int(bytes[seg + 3])
+            if len < 2 { break }
+            if type == 0xE2, seg + 4 + marker.count + 1 <= bytes.count,
+               Array(bytes[(seg + 4)..<(seg + 4 + marker.count)]) == marker, bytes[seg + 4 + marker.count] == 0 {
                 return jpeg
             }
+            seg += 2 + len
         }
         var pos = 2
         while pos + 4 <= bytes.count, bytes[pos] == 0xFF, bytes[pos + 1] == 0xE0 || bytes[pos + 1] == 0xE1 {
@@ -290,6 +302,36 @@ enum Processor {
         out.append(contentsOf: [UInt8](icc))
         out.append(contentsOf: bytes[pos...])
         return Data(out)
+    }
+
+    /// True if a JPEG has no end-of-image marker (FF D9) after its image data starts, i.e. it was
+    /// cut off. Header segments are skipped by length, so an EXIF thumbnail's own end marker
+    /// doesn't count; extra data appended after the image (e.g. a phone's motion-photo video)
+    /// is fine because the real end marker comes before it.
+    static func isTruncatedJPEG(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url, options: .alwaysMapped), data.count > 4 else { return false }
+        return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            let b = raw.bindMemory(to: UInt8.self)
+            let n = b.count
+            guard b[0] == 0xFF, b[1] == 0xD8 else { return false }      // not a JPEG: leave to ImageIO
+            var pos = 2
+            while pos + 4 <= n {
+                guard b[pos] == 0xFF else { return false }               // unusual layout: don't guess
+                let type = b[pos + 1]
+                if type == 0xFF { pos += 1; continue }                   // fill byte
+                if type == 0xD9 { return true }                          // ends before any image data
+                if type == 0xDA { break }                                // start of scan
+                if (0xD0...0xD7).contains(type) || type == 0x01 { pos += 2; continue }
+                pos += 2 + (Int(b[pos + 2]) << 8 | Int(b[pos + 3]))
+            }
+            guard pos + 4 <= n else { return true }                      // header runs past the end
+            var i = pos
+            while i + 1 < n {
+                if b[i] == 0xFF && b[i + 1] == 0xD9 { return false }
+                i += 1
+            }
+            return true
+        }
     }
 
     static func encodeJPEG(_ image: CGImage, quality: Int, metadata: CGImageMetadata?) -> Data? {

@@ -4,7 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 python3 -m venv /tmp/venv
-/tmp/venv/bin/pip -q install pillow numpy
+/tmp/venv/bin/pip -q install pillow numpy piexif
 PY=/tmp/venv/bin/python
 BIN=dist/ImageShrink.app/Contents/MacOS/ImageShrink
 T=/tmp/selftest
@@ -28,6 +28,11 @@ $PY scripts/verify.py "$T/out2" 1000 50000 limits || status=1
 echo "=== Run 3: 2048 px, under 300 KB"
 "$BIN" --selftest "$T/in" "$T/out3" 2048 300000 || status=1
 $PY scripts/verify.py "$T/out3" 2048 300000 limits || status=1
+
+echo "=== JPEG stress tests (scripts/jpeg_tests.py)"
+t0=$(date +%s)
+$PY scripts/jpeg_tests.py "$BIN" /tmp/jpegtest || status=1
+echo "JPEG tests wall time: $(( $(date +%s) - t0 ))s"
 
 echo "=== GUI launch smoke test"
 open -n dist/ImageShrink.app && sleep 8

@@ -65,7 +65,7 @@ if mode == "full":
         "A_tif.jpg": (1000, 667), "-dash.jpg": (1000, 667), "small.jpg": (600, 400),
         "pano.jpg": (1000, 67), "gray16.jpg": (1000, 667), "cmyk.jpg": (1000, 667),
         "alpha.jpg": (1000, 1000), "rotated.jpg": (500, 1000), "meta.jpg": (1000, 667),
-        "photoshop.jpg": (1000, 667), "phone.jpg": (1000, 667),
+        "photoshop.jpg": (1000, 667), "phone.jpg": (1000, 667), "motion.jpg": (1000, 667),
         "sub folder/深层/黄尧 山水 1975.jpg": (667, 1000),
     }
     for rel, (w, h) in expect.items():

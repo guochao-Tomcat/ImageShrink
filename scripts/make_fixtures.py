@@ -56,6 +56,9 @@ ex[0x010E] = "Test title for ImageShrink"
 ex[0x8298] = "Huang Yao Foundation"
 m.save(p("meta.jpg"), quality=92, exif=ex.tobytes())
 
+import io as _io
+_b = _io.BytesIO(); smooth(3000, 2000).save(_b, "JPEG", quality=90)
+open(p("motion.jpg"), "wb").write(_b.getvalue() + bytes(rng.integers(0, 256, 1_000_000, dtype=np.uint8)))  # video appended after the JPEG
 open(p("broken.jpg"), "wb").write(b"this is not an image")
 open(p("notes.txt"), "w").write("not an image")
 smooth(2000, 2000).save(p(".hidden.jpg"))
