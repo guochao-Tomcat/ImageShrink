@@ -50,10 +50,25 @@ enum Processor {
         url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
+    /// Path with symlinks resolved and macOS's "/private" alias removed, so that
+    /// /tmp/x, /private/tmp/x and a symlinked folder all compare equal.
+    static func canonicalPath(_ url: URL) -> String {
+        var p = url.standardizedFileURL.resolvingSymlinksInPath().path
+        for alias in ["/private/tmp", "/private/var", "/private/etc"] where p == alias || p.hasPrefix(alias + "/") {
+            p = String(p.dropFirst("/private".count))
+        }
+        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+        return p
+    }
+
     static func relativePath(_ file: URL, root: URL) -> String {
-        let r = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        let p = file.path
-        if p.hasPrefix(r) { return String(p.dropFirst(r.count)) }
+        let r = canonicalPath(root)
+        let prefix = r == "/" ? "/" : r + "/"
+        let p = canonicalPath(file)
+        if p.hasPrefix(prefix) { return String(p.dropFirst(prefix.count)) }
+        // Fall back to the unresolved paths before giving up on the folder structure
+        let r2 = root.standardizedFileURL.path, p2 = file.standardizedFileURL.path
+        if p2.hasPrefix(r2 + "/") { return String(p2.dropFirst(r2.count + 1)) }
         return file.lastPathComponent
     }
 
@@ -70,10 +85,21 @@ enum Processor {
     }
 
     static func isInside(_ child: URL, _ parent: URL) -> Bool {
-        let c = resolved(child).path + "/"
-        let p = resolved(parent).path + "/"
+        let c = canonicalPath(child) + "/"
+        let p = canonicalPath(parent) + "/"
         return c.hasPrefix(p)
     }
+
+    /// sRGB built from the ICC file, so ImageIO embeds the profile in the JPEG
+    /// (with the named sRGB space it leaves files untagged).
+    static let taggedSRGB: CGColorSpace = {
+        let path = "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
+        if let data = FileManager.default.contents(atPath: path),
+           let cs = CGColorSpace(iccData: data as CFData) {
+            return cs
+        }
+        return CGColorSpace(name: CGColorSpace.sRGB)!
+    }()
 
     // MARK: Scan
 
@@ -177,7 +203,7 @@ enum Processor {
 
         // Flatten onto white in an 8-bit RGB space (sRGB unless asked to keep the original RGB space)
         var notes: [String] = []
-        var space = CGColorSpace(name: CGColorSpace.sRGB)!
+        var space = taggedSRGB
         if !settings.convertToSRGB, let own = scaled.colorSpace, own.model == .rgb {
             space = own
         } else if !settings.convertToSRGB {
