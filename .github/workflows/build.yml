@@ -2,14 +2,14 @@ name: Build ImageShrink
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'test/**']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: build
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
 
       - name: Publish release
         id: release
-        if: steps.build.outcome == 'success' && steps.test.outcome == 'success'
+        if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success' && steps.test.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,7 +57,7 @@ jobs:
           W="$GITHUB_WORKSPACE"
           mkdir -p /tmp/status && cd /tmp/status
           {
-            echo "# Build ${{ github.run_number }}"
+            echo "# Build ${{ github.run_number }} (${{ github.ref_name }})"
             echo "commit: ${{ github.sha }}"
             echo "build: ${{ steps.build.outcome }}"
             echo "selftest: ${{ steps.test.outcome }}"
