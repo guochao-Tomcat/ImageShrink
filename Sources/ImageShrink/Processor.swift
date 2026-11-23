@@ -263,7 +263,41 @@ enum Processor {
                             notes: notes, thumb: makeThumb(flat, side: 80))
     }
 
+    /// Inserts an ICC_PROFILE (APP2) segment after SOI/APP0/APP1 if the JPEG has none.
+    static func embedICC(_ jpeg: Data, icc: Data?) -> Data {
+        guard let icc, !icc.isEmpty, icc.count < 65_000,
+              jpeg.count > 4, jpeg[jpeg.startIndex] == 0xFF, jpeg[jpeg.startIndex + 1] == 0xD8 else { return jpeg }
+        let bytes = [UInt8](jpeg)
+        let marker = Array("ICC_PROFILE".utf8)
+        let scanEnd = min(bytes.count, 262_144)
+        if scanEnd > marker.count {
+            for i in 0..<(scanEnd - marker.count) where bytes[i] == marker[0] && Array(bytes[i..<(i + marker.count)]) == marker {
+                return jpeg
+            }
+        }
+        var pos = 2
+        while pos + 4 <= bytes.count, bytes[pos] == 0xFF, bytes[pos + 1] == 0xE0 || bytes[pos + 1] == 0xE1 {
+            pos += 2 + (Int(bytes[pos + 2]) << 8 | Int(bytes[pos + 3]))
+        }
+        guard pos < bytes.count else { return jpeg }
+        let length = 2 + 12 + 2 + icc.count
+        var out = [UInt8]()
+        out.reserveCapacity(bytes.count + length + 2)
+        out.append(contentsOf: bytes[0..<pos])
+        out.append(contentsOf: [0xFF, 0xE2, UInt8(length >> 8), UInt8(length & 0xFF)])
+        out.append(contentsOf: marker)
+        out.append(contentsOf: [0, 1, 1])          // NUL terminator, chunk 1 of 1
+        out.append(contentsOf: [UInt8](icc))
+        out.append(contentsOf: bytes[pos...])
+        return Data(out)
+    }
+
     static func encodeJPEG(_ image: CGImage, quality: Int, metadata: CGImageMetadata?) -> Data? {
+        guard let raw = encodeJPEGRaw(image, quality: quality, metadata: metadata) else { return nil }
+        return embedICC(raw, icc: image.colorSpace?.copyICCData() as Data?)
+    }
+
+    static func encodeJPEGRaw(_ image: CGImage, quality: Int, metadata: CGImageMetadata?) -> Data? {
         let out = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else {
             return nil
